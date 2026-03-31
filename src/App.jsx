@@ -1,16 +1,15 @@
 import { useState, useEffect } from 'react';
 import { 
   Droplet, FlaskConical, Thermometer, Waves, Activity, BarChart2, Map, 
-  MapPin, TrendingDown, TrendingUp, Leaf, Search, Info, Sun, Moon, User, Bell, Download, CloudRain, SunMedium, Cloud, Brain, Clock, Calculator, Plus, LogOut, CheckCircle, Camera, ShieldAlert, DollarSign, Bug, Image as ImageIcon
+  MapPin, TrendingDown, TrendingUp, Leaf, Search, Info, Sun, Moon, User, Bell, Download, CloudRain, SunMedium, Cloud, Brain, Clock, Calculator, Plus, LogOut, CheckCircle, Camera, ShieldAlert, DollarSign, Bug, Image as ImageIcon,
+  Sprout, ClipboardList, PiggyBank, MessageSquare, TrendingUp as TrendUp, Wheat, Trash2, Send, ChevronRight
 } from 'lucide-react';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { translations } from './translations';
 
-const genAI = new GoogleGenerativeAI("AIzaSyAr-lQMWIpR42zPgQ_XFQaDtTvs4ogHwWI");
-
 import { 
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, BarChart, Bar
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, BarChart, Bar, Cell
 } from 'recharts';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -106,6 +105,30 @@ function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [weatherData, setWeatherData] = useState(null);
   const [locationName, setLocationName] = useState('');
+
+  // Phase 3 - Farm Tools State
+  const [farmTasks, setFarmTasks] = useState(() => JSON.parse(localStorage.getItem('farmTasks') || '[]'));
+  const [newTask, setNewTask] = useState('');
+  const [newTaskFarm, setNewTaskFarm] = useState('');
+  const [harvestLogs, setHarvestLogs] = useState(() => JSON.parse(localStorage.getItem('harvestLogs') || '[]'));
+  const [newHarvestDate, setNewHarvestDate] = useState('');
+  const [newHarvestKg, setNewHarvestKg] = useState('');
+  const [newHarvestPrice, setNewHarvestPrice] = useState('');
+  const [cropCalendars, setCropCalendars] = useState(() => JSON.parse(localStorage.getItem('cropCalendars') || '{}'));
+  const [expenseCosts, setExpenseCosts] = useState({ fertilizer: 0, seeds: 0, labour: 0, water: 0 });
+  const [chatMessages, setChatMessages] = useState([{ role: 'model', text: '🌱 Hello! I am your AI Crop Advisor. Ask me anything about your farm, soil, or crops.' }]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [geminiModel, setGeminiModel] = useState(() => localStorage.getItem('gemini_model') || 'gemini-1.5-flash');
+  const [showFloatChat, setShowFloatChat] = useState(false);
+  const [marketPrices, setMarketPrices] = useState(() => {
+    const saved = localStorage.getItem('customMarketPrices');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [isMarketLoading, setIsMarketLoading] = useState(false);
+  const [marketLastUpdated, setMarketLastUpdated] = useState(null);
+  const [editingMarketIdx, setEditingMarketIdx] = useState(null);
+  const [editingMarketValue, setEditingMarketValue] = useState('');
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -299,6 +322,155 @@ function App() {
     return { score: Math.max(score, 0), advice };
   };
 
+  // Phase 3 Helper Functions
+  const calcSoilHealthScore = (point) => {
+    let score = 0;
+    score += Math.min(30, Math.round((point.moisture / 100) * 30));
+    const phScore = point.ph >= 6.0 && point.ph <= 7.5 ? 20 : point.ph >= 5.5 && point.ph <= 8.0 ? 10 : 5;
+    score += phScore;
+    const salinityScore = point.salinity < 1.5 ? 20 : point.salinity < 3.0 ? 10 : 0;
+    score += salinityScore;
+    score += Math.min(15, Math.round((point.n / 200) * 15));
+    score += Math.min(10, Math.round((point.p / 80) * 10));
+    score += Math.min(5, Math.round((point.k / 100) * 5));
+    return Math.min(100, score);
+  };
+
+  const addTask = () => {
+    if (!newTask.trim()) return;
+    const task = { id: Date.now(), text: newTask, farm: selectedPoint.name, done: false, date: new Date().toLocaleDateString() };
+    const updated = [...farmTasks, task];
+    setFarmTasks(updated);
+    localStorage.setItem('farmTasks', JSON.stringify(updated));
+    setNewTask('');
+  };
+
+  const toggleTask = (id) => {
+    const updated = farmTasks.map(t => t.id === id ? { ...t, done: !t.done } : t);
+    setFarmTasks(updated);
+    localStorage.setItem('farmTasks', JSON.stringify(updated));
+  };
+
+  const deleteTask = (id) => {
+    const updated = farmTasks.filter(t => t.id !== id);
+    setFarmTasks(updated);
+    localStorage.setItem('farmTasks', JSON.stringify(updated));
+  };
+
+  const addHarvestLog = () => {
+    if (!newHarvestKg || !newHarvestDate) return;
+    const log = { id: Date.now(), date: newHarvestDate, kg: Number(newHarvestKg), price: Number(newHarvestPrice), farm: selectedPoint.name, earnings: Math.round(Number(newHarvestKg) * Number(newHarvestPrice)) };
+    const updated = [...harvestLogs, log];
+    setHarvestLogs(updated);
+    localStorage.setItem('harvestLogs', JSON.stringify(updated));
+    setNewHarvestDate(''); setNewHarvestKg(''); setNewHarvestPrice('');
+  };
+
+  const deleteHarvestLog = (id) => {
+    const updated = harvestLogs.filter(h => h.id !== id);
+    setHarvestLogs(updated);
+    localStorage.setItem('harvestLogs', JSON.stringify(updated));
+  };
+
+  const saveCropCalendar = (farmId, plantDate) => {
+    const updated = { ...cropCalendars, [farmId]: plantDate };
+    setCropCalendars(updated);
+    localStorage.setItem('cropCalendars', JSON.stringify(updated));
+  };
+
+  const getCropStage = (plantDate) => {
+    if (!plantDate) return null;
+    const days = Math.floor((new Date() - new Date(plantDate)) / (1000 * 60 * 60 * 24));
+    if (days < 0) return { stage: 'Planned', color: '#94a3b8', days };
+    if (days < 14) return { stage: '🌱 Seedling', color: '#22c55e', days };
+    if (days < 45) return { stage: '🌿 Growing', color: '#16a34a', days };
+    if (days < 90) return { stage: '🌾 Maturing', color: '#f59e0b', days };
+    return { stage: '🌟 Harvest Ready!', color: '#ef4444', days };
+  };
+
+  const sendChatMessage = async () => {
+    if (!chatInput.trim() || isChatLoading) return;
+    const userMsg = chatInput.trim();
+    setChatInput('');
+    setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+    setIsChatLoading(true);
+    try {
+      const apiKey = localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey) { setChatMessages(prev => [...prev, { role: 'model', text: '⚠️ Please set your Gemini API key to use AI Chat.' }]); setIsChatLoading(false); return; }
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: geminiModel });
+      const context = `You are an expert agricultural advisor. Current farm: ${selectedPoint.name}. Soil: Moisture=${selectedPoint.moisture}%, pH=${selectedPoint.ph}, Temp=${selectedPoint.temp}°C, Salinity=${selectedPoint.salinity} dS/m, N=${selectedPoint.n}, P=${selectedPoint.p}, K=${selectedPoint.k} mg/kg. Crop: ${selectedCrop ? selectedCrop.name : 'None'}. Answer concisely in 2-3 sentences.`;
+      const result = await model.generateContent(`${context}\n\nUser: ${userMsg}`);
+      setChatMessages(prev => [...prev, { role: 'model', text: result.response.text() }]);
+    } catch (err) {
+      const msg = err.message || '';
+      const friendly = msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED')
+        ? '⚠️ API Quota exceeded (Free tier: 1500 req/day). Please wait a moment and try again, or upgrade your Gemini API plan at ai.google.dev.'
+        : msg.includes('API_KEY') || msg.includes('401')
+        ? '🔑 Invalid API Key. Please check your VITE_GEMINI_API_KEY in the .env file.'
+        : '❌ Error: ' + msg.split('[')[0].trim();
+      setChatMessages(prev => [...prev, { role: 'model', text: friendly }]);
+    } finally {
+      setIsChatLoading(false);
+    }
+  };
+
+  const fetchMarketPrices = async () => {
+    setIsMarketLoading(true);
+    try {
+      const apiKey = localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey) { alert('Please set your Gemini API key first.'); setIsMarketLoading(false); return; }
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: geminiModel });
+      const prompt = `You are a Sri Lanka agricultural market data expert. Provide realistic approximate wholesale prices (Rs.) for these commodities at Colombo Manning Market / Peliyagoda Economic Centre, Sri Lanka, as of today ${new Date().toLocaleDateString('en-LK')}.\n\nReply ONLY with a valid JSON array, no markdown:\n[{"name":"Rice (Nadu)","price":0,"unit":"kg","trend":"stable"},{"name":"Big Onion","price":0,"unit":"kg","trend":"stable"},{"name":"Tomato","price":0,"unit":"kg","trend":"stable"},{"name":"Carrot","price":0,"unit":"kg","trend":"stable"},{"name":"Potato","price":0,"unit":"kg","trend":"stable"},{"name":"Green Chili","price":0,"unit":"kg","trend":"stable"},{"name":"Coconut","price":0,"unit":"piece","trend":"stable"},{"name":"Manioc","price":0,"unit":"kg","trend":"stable"},{"name":"Bitter Gourd","price":0,"unit":"kg","trend":"stable"},{"name":"Leeks","price":0,"unit":"kg","trend":"stable"},{"name":"Cabbage","price":0,"unit":"kg","trend":"stable"},{"name":"Banana (Ambul)","price":0,"unit":"kg","trend":"stable"}]\n\nFill in realistic current prices. Use "up", "down", or "stable" for trend.`;
+      const result = await model.generateContent(prompt);
+      const text = result.response.text().replace(/```json/gi,'').replace(/```/gi,'').trim();
+      const parsed = JSON.parse(text);
+      setMarketPrices(parsed);
+      localStorage.setItem('customMarketPrices', JSON.stringify(parsed));
+      setMarketLastUpdated(new Date());
+    } catch (err) {
+      console.error(err);
+      alert('Failed to fetch market prices: ' + err.message);
+    } finally {
+      setIsMarketLoading(false);
+    }
+  };
+
+  const saveMarketPriceEdit = (idx) => {
+    if (!marketPrices) return;
+    const updated = marketPrices.map((item, i) =>
+      i === idx ? { ...item, price: Number(editingMarketValue) || item.price } : item
+    );
+    setMarketPrices(updated);
+    localStorage.setItem('customMarketPrices', JSON.stringify(updated));
+    setEditingMarketIdx(null);
+    setEditingMarketValue('');
+  };
+
+  const setMarketTrend = (idx, trend) => {
+    if (!marketPrices) return;
+    const updated = marketPrices.map((item, i) => i === idx ? { ...item, trend } : item);
+    setMarketPrices(updated);
+    localStorage.setItem('customMarketPrices', JSON.stringify(updated));
+  };
+
+  const addMarketItem = () => {
+    const name = prompt('Enter commodity name:');
+    if (!name) return;
+    const price = Number(prompt('Enter price (Rs.):') || 0);
+    const unit = prompt('Enter unit (kg / piece / bundle):') || 'kg';
+    const updated = [...(marketPrices || []), { name, price, unit, trend: 'stable' }];
+    setMarketPrices(updated);
+    localStorage.setItem('customMarketPrices', JSON.stringify(updated));
+  };
+
+  const deleteMarketItem = (idx) => {
+    const updated = marketPrices.filter((_, i) => i !== idx);
+    setMarketPrices(updated);
+    localStorage.setItem('customMarketPrices', JSON.stringify(updated));
+  };
+
   if (!isAuthenticated) {
     return (
       <div className="login-screen">
@@ -347,8 +519,19 @@ function App() {
     const reader = new FileReader();
     reader.onloadend = async () => {
       try {
+        const apiKey = localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY;
+        if (!apiKey) {
+           setAiResult({ 
+             name: "API Key Required", 
+             remedy: "Please enter your Google Gemini API Key in the settings below to enable AI leaf analysis." 
+           });
+           setIsAnalyzing(false);
+           return;
+        }
+        
+        const genAI = new GoogleGenerativeAI(apiKey);
         const base64data = reader.result.split(',')[1];
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const model = genAI.getGenerativeModel({ model: geminiModel });
         const prompt = 'You are an expert plant pathologist. Analyze this leaf. If it is healthy, say it\'s healthy. If there is a disease or pest, identify it. Reply ONLY with a strict JSON object: { "name": "Disease/Pest Name", "remedy": "A short 1-sentence agricultural remedy." }. No markdown, pure JSON.';
         const imageParts = [{ inlineData: { data: base64data, mimeType: file.type } }];
         
@@ -553,6 +736,7 @@ function App() {
         <button className={`tab-btn ${activeTab === 'charts' ? 'active' : ''}`} onClick={() => setActiveTab('charts')}><BarChart2 size={18} /> {t.dataCharts}</button>
         <button className={`tab-btn ${activeTab === 'map' ? 'active' : ''}`} onClick={() => setActiveTab('map')}><Map size={18} /> {t.fieldMap}</button>
         <button className={`tab-btn ${activeTab === 'pest' ? 'active' : ''}`} onClick={() => setActiveTab('pest')}><Bug size={18} /> {t.pestTab || "Pest AI"}</button>
+        <button className={`tab-btn ${activeTab === 'tools' ? 'active' : ''}`} onClick={() => setActiveTab('tools')}><ClipboardList size={18} /> Farm Tools</button>
       </div>
 
       {/* Split View */}
@@ -613,6 +797,37 @@ function App() {
                   </button>
                 </div>
               </div>
+
+              {/* Soil Health Score */}
+              {(() => {
+                const score = calcSoilHealthScore(selectedPoint);
+                const color = score >= 75 ? '#22c55e' : score >= 50 ? '#f59e0b' : '#ef4444';
+                const label = score >= 75 ? 'Excellent' : score >= 50 ? 'Moderate' : 'Poor';
+                return (
+                  <div className="chart-container-box print-hide" style={{display: 'flex', alignItems: 'center', gap: '1.5rem', padding: '1rem'}}>
+                    <div style={{position: 'relative', width: 80, height: 80, flexShrink: 0}}>
+                      <svg width="80" height="80" viewBox="0 0 80 80">
+                        <circle cx="40" cy="40" r="34" fill="none" stroke="var(--border-color)" strokeWidth="8"/>
+                        <circle cx="40" cy="40" r="34" fill="none" stroke={color} strokeWidth="8"
+                          strokeDasharray={`${(score / 100) * 213.6} 213.6`}
+                          strokeLinecap="round" transform="rotate(-90 40 40)" style={{transition: 'stroke-dasharray 0.8s ease'}}/>
+                        <text x="40" y="44" textAnchor="middle" fontSize="16" fontWeight="bold" fill={color}>{score}</text>
+                      </svg>
+                    </div>
+                    <div>
+                      <div style={{fontWeight: 700, fontSize: '1.1rem'}}>Soil Health Score</div>
+                      <div style={{color, fontWeight: 600, fontSize: '1.2rem'}}>{label}</div>
+                      <div style={{fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem'}}>Based on Moisture, pH, Salinity, NPK</div>
+                    </div>
+                    <div style={{marginLeft: 'auto', display: 'flex', flexDirection: 'column', gap: '0.3rem', fontSize: '0.8rem'}}>
+                      <div>💧 Moisture: <b>{Math.min(30, Math.round((selectedPoint.moisture/100)*30))}/30</b></div>
+                      <div>🧪 pH: <b>{selectedPoint.ph >= 6.0 && selectedPoint.ph <= 7.5 ? 20 : 10}/20</b></div>
+                      <div>🌊 Salinity: <b>{selectedPoint.salinity < 1.5 ? 20 : selectedPoint.salinity < 3.0 ? 10 : 0}/20</b></div>
+                      <div>🌱 NPK: <b>{Math.min(30, Math.round((selectedPoint.n/200)*15) + Math.round((selectedPoint.p/80)*10) + Math.round((selectedPoint.k/100)*5))}/30</b></div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Yield & Profit Card */}
               <div className="yield-card print-hide" style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
@@ -961,9 +1176,442 @@ function App() {
                   </div>
                 )
               )}
+
+            </div>
+          )}
+
+          {/* ===== FARM TOOLS TAB ===== */}
+          {activeTab === 'tools' && (
+            <div style={{display: 'flex', flexDirection: 'column', gap: '1.5rem'}}>
+              <h3 className="panel-title">🛠️ Farm Tools & Management</h3>
+
+              {/* ---- Crop Calendar ---- */}
+              <div className="chart-container-box">
+                <div className="chart-box-title"><Sprout size={16} style={{verticalAlign:'middle', marginRight:6}}/>Crop Calendar</div>
+                <div style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                  <div style={{flex: 1}}>
+                    <div style={{fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '0.3rem'}}>Planting date for: <b>{selectedPoint.name}</b></div>
+                    <input type="date" value={cropCalendars[selectedPoint.id] || ''} onChange={(e) => saveCropCalendar(selectedPoint.id, e.target.value)}
+                      style={{padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', width: '100%'}} />
+                  </div>
+                  {cropCalendars[selectedPoint.id] && (() => {
+                    const info = getCropStage(cropCalendars[selectedPoint.id]);
+                    return (
+                      <div style={{textAlign: 'center', padding: '0.75rem 1.25rem', background: info.color + '22', borderRadius: '10px', border: `1px solid ${info.color}`, minWidth: '140px'}}>
+                        <div style={{fontWeight: 700, color: info.color, fontSize: '1rem'}}>{info.stage}</div>
+                        <div style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>{info.days >= 0 ? `Day ${info.days}` : 'Upcoming'}</div>
+                      </div>
+                    );
+                  })()}
+                </div>
+                {/* All farms quick view */}
+                <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px,1fr))', gap: '0.5rem'}}>
+                  {testPoints.map(p => {
+                    const stage = cropCalendars[p.id] ? getCropStage(cropCalendars[p.id]) : null;
+                    return (
+                      <div key={p.id} onClick={() => setSelectedPointId(p.id)} style={{padding: '0.5rem 0.75rem', borderRadius: '8px', background: 'var(--surface-color)', border: `1px solid ${stage ? stage.color : 'var(--border-color)'}`, cursor: 'pointer', fontSize: '0.8rem'}}>
+                        <div style={{fontWeight: 600, marginBottom: '0.2rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'}}>{p.name}</div>
+                        <div style={{color: stage ? stage.color : 'var(--text-secondary)'}}>{stage ? stage.stage : '— No date set'}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* ---- Task Manager ---- */}
+              <div className="chart-container-box">
+                <div className="chart-box-title"><ClipboardList size={16} style={{verticalAlign:'middle', marginRight:6}}/>Task Manager</div>
+                <div style={{display: 'flex', gap: '0.5rem', marginBottom: '1rem'}}>
+                  <input value={newTask} onChange={e => setNewTask(e.target.value)} onKeyDown={e => e.key === 'Enter' && addTask()}
+                    placeholder={`New task for ${selectedPoint.name}...`}
+                    style={{flex: 1, padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)'}} />
+                  <button className="btn-primary" onClick={addTask} style={{padding: '0.5rem 1rem'}}>Add</button>
+                </div>
+                <div style={{display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '220px', overflowY: 'auto'}}>
+                  {farmTasks.length === 0 && <div style={{color: 'var(--text-secondary)', fontSize: '0.9rem', textAlign: 'center', padding: '1rem'}}>No tasks yet. Add one above!</div>}
+                  {farmTasks.map(task => (
+                    <div key={task.id} style={{display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '8px', background: task.done ? 'var(--surface-color)' : 'var(--bg-color)', border: '1px solid var(--border-color)', opacity: task.done ? 0.6 : 1}}>
+                      <input type="checkbox" checked={task.done} onChange={() => toggleTask(task.id)} style={{width: 16, height: 16, cursor: 'pointer'}} />
+                      <div style={{flex: 1}}>
+                        <div style={{textDecoration: task.done ? 'line-through' : 'none', fontSize: '0.9rem'}}>{task.text}</div>
+                        <div style={{fontSize: '0.75rem', color: 'var(--text-secondary)'}}>{task.farm} • {task.date}</div>
+                      </div>
+                      <button onClick={() => deleteTask(task.id)} style={{background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-red)', padding: 0}}><Trash2 size={14}/></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ---- Expense Tracker + ROI ---- */}
+              <div className="chart-container-box">
+                <div className="chart-box-title"><PiggyBank size={16} style={{verticalAlign:'middle', marginRight:6}}/>Expense Tracker & Net Profit</div>
+                <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px,1fr))', gap: '0.75rem', marginBottom: '1rem'}}>
+                  {['fertilizer','seeds','labour','water'].map(key => (
+                    <div key={key}>
+                      <div style={{fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', textTransform: 'capitalize'}}>{key} Cost (Rs.)</div>
+                      <input type="number" min="0" value={expenseCosts[key]} onChange={e => setExpenseCosts(prev => ({...prev, [key]: Number(e.target.value)}))} 
+                        style={{width: '100%', padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)'}} />
+                    </div>
+                  ))}
+                </div>
+                {(() => {
+                  const totalExp = Object.values(expenseCosts).reduce((a,b) => a+b, 0);
+                  const grossRev = Math.round(calcYield() * (landSize * 0.4047) * marketPrice);
+                  const netProfit = grossRev - totalExp;
+                  const profitColor = netProfit >= 0 ? '#22c55e' : '#ef4444';
+                  const roi = totalExp > 0 ? ((netProfit / totalExp) * 100).toFixed(1) : 0;
+
+                  const roiChartData = [
+                    { name: 'Fertilizer', amount: expenseCosts.fertilizer, fill: '#f87171' },
+                    { name: 'Seeds', amount: expenseCosts.seeds, fill: '#fb923c' },
+                    { name: 'Labour', amount: expenseCosts.labour, fill: '#facc15' },
+                    { name: 'Water', amount: expenseCosts.water, fill: '#60a5fa' },
+                    { name: 'Gross Revenue', amount: grossRev, fill: '#4ade80' },
+                    { name: 'Net Profit', amount: Math.max(0, netProfit), fill: '#22c55e' },
+                  ];
+
+                  return (
+                    <>
+                      <div style={{display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '0.75rem', marginBottom: '1.25rem'}}>
+                        <div style={{padding: '0.75rem', background: 'rgba(239,68,68,0.1)', borderRadius: '8px', textAlign: 'center'}}>
+                          <div style={{fontSize: '0.75rem', color: 'var(--text-secondary)'}}>Total Expenses</div>
+                          <div style={{fontWeight: 700, fontSize: '1.2rem', color: '#ef4444'}}>Rs. {totalExp.toLocaleString()}</div>
+                        </div>
+                        <div style={{padding: '0.75rem', background: 'rgba(34,197,94,0.1)', borderRadius: '8px', textAlign: 'center'}}>
+                          <div style={{fontSize: '0.75rem', color: 'var(--text-secondary)'}}>Gross Revenue</div>
+                          <div style={{fontWeight: 700, fontSize: '1.2rem', color: '#22c55e'}}>Rs. {grossRev.toLocaleString()}</div>
+                        </div>
+                        <div style={{padding: '0.75rem', background: `rgba(${netProfit>=0?'34,197,94':'239,68,68'},0.15)`, borderRadius: '8px', textAlign: 'center', border: `2px solid ${profitColor}`}}>
+                          <div style={{fontSize: '0.75rem', color: 'var(--text-secondary)'}}>Net Profit</div>
+                          <div style={{fontWeight: 700, fontSize: '1.3rem', color: profitColor}}>Rs. {Math.abs(netProfit).toLocaleString()} {netProfit < 0 ? '(Loss)' : ''}</div>
+                        </div>
+                      </div>
+
+                      {/* ROI Bar Chart */}
+                      <div style={{background: 'var(--surface-color)', borderRadius: '10px', padding: '1rem', border: '1px solid var(--border-color)'}}>
+                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem'}}>
+                          <div style={{fontWeight: 600, fontSize: '0.9rem'}}>📊 ROI Breakdown Chart</div>
+                          <div style={{display: 'flex', gap: '1rem', fontSize: '0.8rem'}}>
+                            <span>ROI: <b style={{color: Number(roi) >= 0 ? '#22c55e' : '#ef4444'}}>{roi}%</b></span>
+                            <span style={{color: 'var(--text-secondary)'}}>Based on predicted yield × market price</span>
+                          </div>
+                        </div>
+                        <div style={{height: 200}}>
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={roiChartData} margin={{top: 5, right: 10, left: 10, bottom: 5}}>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border-color)" />
+                              <XAxis dataKey="name" tick={{fontSize: 10, fill: 'var(--text-secondary)'}} />
+                              <YAxis tick={{fontSize: 10, fill: 'var(--text-secondary)'}} tickFormatter={v => `Rs.${(v/1000).toFixed(0)}k`} />
+                              <RechartsTooltip formatter={(v) => [`Rs. ${v.toLocaleString()}`, 'Amount']} />
+                              <Bar dataKey="amount" radius={[6,6,0,0]}>
+                                {roiChartData.map((entry, index) => (
+                                  <Cell key={index} fill={entry.fill} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                        {/* Cost breakdown mini bars */}
+                        <div style={{marginTop: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.4rem'}}>
+                          {['fertilizer','seeds','labour','water'].map((key, i) => {
+                            const colors = ['#f87171','#fb923c','#facc15','#60a5fa'];
+                            const pct = totalExp > 0 ? Math.round((expenseCosts[key] / totalExp) * 100) : 0;
+                            return (
+                              <div key={key} style={{display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.78rem'}}>
+                                <div style={{width: '70px', textTransform:'capitalize', color: 'var(--text-secondary)', flexShrink:0}}>{key}</div>
+                                <div style={{flex: 1, height: '8px', background: 'var(--border-color)', borderRadius: '4px', overflow:'hidden'}}>
+                                  <div style={{width: `${pct}%`, height: '100%', background: colors[i], borderRadius: '4px', transition: 'width 0.6s ease'}} />
+                                </div>
+                                <div style={{width: '35px', textAlign:'right', fontWeight:600}}>{pct}%</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+
+              {/* ---- Harvest Tracker ---- */}
+              <div className="chart-container-box">
+                <div className="chart-box-title"><Wheat size={16} style={{verticalAlign:'middle', marginRight:6}}/>Harvest Tracker</div>
+                <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem', alignItems: 'flex-end'}}>
+                  <div><div style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Date</div><input type="date" value={newHarvestDate} onChange={e => setNewHarvestDate(e.target.value)} style={{padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)'}}/></div>
+                  <div><div style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Amount (kg)</div><input type="number" placeholder="e.g. 500" value={newHarvestKg} onChange={e => setNewHarvestKg(e.target.value)} style={{padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', width: '100px'}}/></div>
+                  <div><div style={{fontSize: '0.8rem', color: 'var(--text-secondary)'}}>Price/kg (Rs.)</div><input type="number" placeholder="e.g. 150" value={newHarvestPrice} onChange={e => setNewHarvestPrice(e.target.value)} style={{padding: '0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', width: '100px'}}/></div>
+                  <button className="btn-primary" onClick={addHarvestLog} style={{padding: '0.5rem 1rem'}}>Log Harvest</button>
+                </div>
+                {harvestLogs.length === 0 ? <div style={{color: 'var(--text-secondary)', textAlign: 'center', padding: '1rem', fontSize: '0.9rem'}}>No harvests logged yet.</div> : (
+                  <div style={{overflowX: 'auto'}}>
+                    <table style={{width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem'}}>
+                      <thead><tr style={{borderBottom: '2px solid var(--border-color)', textAlign: 'left'}}>
+                        <th style={{padding: '0.5rem'}}>Date</th><th style={{padding: '0.5rem'}}>Farm</th><th style={{padding: '0.5rem'}}>Kg</th><th style={{padding: '0.5rem'}}>Price</th><th style={{padding: '0.5rem', color: '#22c55e'}}>Earnings</th><th></th>
+                      </tr></thead>
+                      <tbody>{harvestLogs.map(h => (
+                        <tr key={h.id} style={{borderBottom: '1px solid var(--border-color)'}}>
+                          <td style={{padding: '0.5rem'}}>{h.date}</td>
+                          <td style={{padding: '0.5rem', maxWidth: '120px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{h.farm}</td>
+                          <td style={{padding: '0.5rem'}}>{h.kg} kg</td>
+                          <td style={{padding: '0.5rem'}}>Rs.{h.price}</td>
+                          <td style={{padding: '0.5rem', fontWeight: 700, color: '#22c55e'}}>Rs. {h.earnings.toLocaleString()}</td>
+                          <td><button onClick={() => deleteHarvestLog(h.id)} style={{background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-red)', padding: '0.25rem'}}><Trash2 size={14}/></button></td>
+                        </tr>
+                      ))}</tbody>
+                      <tfoot><tr style={{borderTop: '2px solid var(--border-color)', fontWeight: 700}}>
+                        <td colSpan="4" style={{padding: '0.5rem', textAlign: 'right'}}>Total Earnings:</td>
+                        <td style={{padding: '0.5rem', color: '#22c55e'}}>Rs. {harvestLogs.reduce((a,h)=>a+h.earnings,0).toLocaleString()}</td>
+                        <td></td>
+                      </tr></tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* ---- AI Crop Advisor Chat ---- */}
+              <div className="chart-container-box" style={{display: 'flex', flexDirection: 'column'}}>
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem'}}>
+                  <div className="chart-box-title" style={{margin: 0}}><MessageSquare size={16} style={{verticalAlign:'middle', marginRight:6}}/>AI Crop Advisor Chat</div>
+                  <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem'}}>
+                    <span style={{color: 'var(--text-secondary)'}}>🤖 Model:</span>
+                    <select
+                      value={geminiModel}
+                      onChange={e => { setGeminiModel(e.target.value); localStorage.setItem('gemini_model', e.target.value); }}
+                      style={{padding: '0.3rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', fontSize: '0.8rem', cursor: 'pointer'}}>
+                      <option value="gemini-1.5-flash">gemini-1.5-flash ⚡ (1500/day free)</option>
+                      <option value="gemini-2.0-flash">gemini-2.0-flash 🚀</option>
+                      <option value="gemini-2.5-flash">gemini-2.5-flash ✨ (20/day free)</option>
+                      <option value="gemini-1.5-pro">gemini-1.5-pro 💎 (50/day free)</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{flex: 1, maxHeight: '280px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1rem', padding: '0.5rem'}}>
+                  {chatMessages.map((msg, i) => (
+                    <div key={i} style={{display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start'}}>
+                      <div style={{
+                        maxWidth: '80%', padding: '0.6rem 1rem', borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                        background: msg.role === 'user' ? 'var(--accent-green)' : 'var(--surface-color)',
+                        color: msg.role === 'user' ? 'white' : 'var(--text-primary)',
+                        fontSize: '0.875rem', lineHeight: 1.5, border: '1px solid var(--border-color)'
+                      }}>{msg.text}</div>
+                    </div>
+                  ))}
+                  {isChatLoading && <div style={{display: 'flex', justifyContent: 'flex-start'}}><div style={{padding: '0.6rem 1rem', borderRadius: '16px 16px 16px 4px', background: 'var(--surface-color)', border: '1px solid var(--border-color)', fontSize: '0.875rem', color: 'var(--text-secondary)'}}>🤔 Thinking...</div></div>}
+                </div>
+                <div style={{display: 'flex', gap: '0.5rem'}}>
+                  <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendChatMessage()}
+                    placeholder="Ask about soil, crops, or farming tips..."
+                    style={{flex: 1, padding: '0.6rem 1rem', borderRadius: '20px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', fontSize: '0.875rem'}} />
+                  <button onClick={sendChatMessage} disabled={isChatLoading} className="btn-primary" style={{borderRadius: '50%', width: '40px', height: '40px', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0}}><Send size={16}/></button>
+                </div>
+              </div>
+
+              {/* ---- Colombo Market Price Board ---- */}
+              <div className="chart-container-box">
+                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem'}}>
+                  <div className="chart-box-title" style={{margin: 0}}>
+                    🛒 Colombo Market Price Board
+                    <span style={{fontSize: '0.75rem', fontWeight: 400, color: 'var(--text-secondary)', marginLeft: '0.5rem'}}>(AI-estimated · Approx.)</span>
+                  </div>
+                  <div style={{display: 'flex', alignItems: 'center', gap: '0.75rem'}}>
+                    {marketLastUpdated && (
+                      <span style={{fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
+                        Updated: {marketLastUpdated.toLocaleTimeString()}
+                      </span>
+                    )}
+                    <button onClick={fetchMarketPrices} disabled={isMarketLoading} className="btn-primary"
+                      style={{padding: '0.4rem 1rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem'}}>
+                      {isMarketLoading ? '⏳ Fetching...' : '🔄 Fetch Prices'}
+                    </button>
+                  </div>
+                </div>
+
+                {!marketPrices && !isMarketLoading && (
+                  <div style={{textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)'}}>
+                    <div style={{fontSize: '2.5rem', marginBottom: '0.5rem'}}>🛒</div>
+                    <div style={{fontWeight: 500, marginBottom: '0.25rem'}}>No price data loaded</div>
+                    <div style={{fontSize: '0.85rem'}}>Click "Fetch Prices" to get AI-estimated Colombo market prices</div>
+                  </div>
+                )}
+
+                {isMarketLoading && (
+                  <div style={{textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)'}}>
+                    <div style={{fontSize: '1.5rem', marginBottom: '0.5rem', animation: 'spin 1s linear infinite', display: 'inline-block'}}>⏳</div>
+                    <div>Fetching prices from Gemini AI...</div>
+                  </div>
+                )}
+
+                {marketPrices && !isMarketLoading && (
+                  <div style={{overflowX: 'auto'}}>
+                    <table style={{width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem'}}>
+                      <thead>
+                        <tr style={{background: 'var(--surface-color)', borderBottom: '2px solid var(--border-color)'}}>
+                          <th style={{padding: '0.6rem 0.75rem', textAlign: 'left', fontWeight: 600}}>Commodity</th>
+                          <th style={{padding: '0.6rem 0.75rem', textAlign: 'center', fontWeight: 600}}>Unit</th>
+                          <th style={{padding: '0.6rem 0.75rem', textAlign: 'right', fontWeight: 600}}>Price (Rs.) ✏️</th>
+                          <th style={{padding: '0.6rem 0.75rem', textAlign: 'center', fontWeight: 600}}>Trend</th>
+                          <th style={{padding: '0.6rem 0.75rem', textAlign: 'center', fontWeight: 600}}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {marketPrices.map((item, i) => (
+                          <tr key={i} style={{borderBottom: '1px solid var(--border-color)', transition: 'background 0.2s'}}
+                            onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-color)'}
+                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                            <td style={{padding: '0.55rem 0.75rem', fontWeight: 500}}>{item.name}</td>
+                            <td style={{padding: '0.55rem 0.75rem', textAlign: 'center', color: 'var(--text-secondary)'}}>/{item.unit}</td>
+                            <td style={{padding: '0.55rem 0.75rem', textAlign: 'right'}}>
+                              {editingMarketIdx === i ? (
+                                <div style={{display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.4rem'}}>
+                                  <input
+                                    type="number" autoFocus
+                                    value={editingMarketValue}
+                                    onChange={e => setEditingMarketValue(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter') saveMarketPriceEdit(i); if (e.key === 'Escape') setEditingMarketIdx(null); }}
+                                    style={{width: '90px', padding: '0.25rem 0.4rem', borderRadius: '4px', border: '2px solid var(--accent-green)', background: 'var(--bg-color)', color: 'var(--text-primary)', textAlign: 'right', fontSize: '0.88rem'}}
+                                  />
+                                  <button onClick={() => saveMarketPriceEdit(i)} style={{background: '#22c55e', color: 'white', border: 'none', borderRadius: '4px', padding: '0.2rem 0.5rem', cursor: 'pointer', fontSize: '0.8rem'}}>✓</button>
+                                  <button onClick={() => setEditingMarketIdx(null)} style={{background: 'var(--border-color)', color: 'var(--text-primary)', border: 'none', borderRadius: '4px', padding: '0.2rem 0.5rem', cursor: 'pointer', fontSize: '0.8rem'}}>✗</button>
+                                </div>
+                              ) : (
+                                <span
+                                  onClick={() => { setEditingMarketIdx(i); setEditingMarketValue(item.price); }}
+                                  style={{fontWeight: 700, fontSize: '1rem', cursor: 'pointer',
+                                    color: item.trend === 'up' ? '#22c55e' : item.trend === 'down' ? '#ef4444' : 'var(--text-primary)',
+                                    borderBottom: '1px dashed var(--border-color)', paddingBottom: '1px'}}
+                                  title="Click to edit price">
+                                  {item.price.toLocaleString()}
+                                </span>
+                              )}
+                            </td>
+                            <td style={{padding: '0.55rem 0.75rem', textAlign: 'center'}}>
+                              <div style={{display: 'flex', justifyContent: 'center', gap: '0.2rem'}}>
+                                {['up','stable','down'].map(t => (
+                                  <button key={t} onClick={() => setMarketTrend(i, t)}
+                                    style={{border: 'none', borderRadius: '4px', padding: '0.15rem 0.3rem', cursor: 'pointer', fontSize: '0.9rem',
+                                      background: item.trend === t ? (t === 'up' ? '#22c55e' : t === 'down' ? '#ef4444' : '#64748b') : 'var(--surface-color)',
+                                      opacity: item.trend === t ? 1 : 0.4, transition: 'all 0.2s'}}>
+                                    {t === 'up' ? '📈' : t === 'down' ? '📉' : '➡️'}
+                                  </button>
+                                ))}
+                              </div>
+                            </td>
+                            <td style={{padding: '0.55rem 0.75rem', textAlign: 'center'}}>
+                              <button onClick={() => deleteMarketItem(i)} title="Delete row"
+                                style={{background: 'none', border: 'none', cursor: 'pointer', color: 'var(--accent-red)', padding: '0.2rem'}}>
+                                <Trash2 size={14}/>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.75rem', flexWrap: 'wrap', gap: '0.5rem'}}>
+                      <button onClick={addMarketItem} className="btn-secondary"
+                        style={{fontSize: '0.82rem', padding: '0.4rem 0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem'}}>
+                        <Plus size={13}/> Add Commodity
+                      </button>
+                      <div style={{padding: '0.5rem 0.75rem', background: 'rgba(245,158,11,0.1)', borderRadius: '6px', border: '1px solid rgba(245,158,11,0.3)', fontSize: '0.75rem', color: 'var(--text-secondary)'}}>
+                        ⚠️ AI-estimated prices. Official:{' '}
+                        <a href="http://www.harti.gov.lk" target="_blank" rel="noopener noreferrer" style={{color: 'var(--accent-blue)'}}>harti.gov.lk</a>
+                        {' · '}Click any price to edit
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
         </div>
+      </div>
+
+      {/* ===== FLOATING AI CHAT WIDGET ===== */}
+      <div style={{
+        position: 'fixed', bottom: '1.5rem', right: '1.5rem', zIndex: 9999,
+        display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.75rem'
+      }}>
+        {/* Chat Panel */}
+        {showFloatChat && (
+          <div style={{
+            width: '340px', height: '480px', background: 'var(--bg-color)',
+            border: '1px solid var(--border-color)', borderRadius: '16px',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column',
+            overflow: 'hidden', animation: 'slideUp 0.2s ease'
+          }}>
+            {/* Header */}
+            <div style={{
+              padding: '0.75rem 1rem', background: 'var(--accent-green)',
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+            }}>
+              <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'white', fontWeight: 600}}>
+                <span style={{fontSize: '1.1rem'}}>🌱</span> AI Crop Advisor
+              </div>
+              <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+                <select value={geminiModel} onChange={e => { setGeminiModel(e.target.value); localStorage.setItem('gemini_model', e.target.value); }}
+                  style={{fontSize: '0.7rem', padding: '0.15rem 0.3rem', borderRadius: '4px', border: 'none', background: 'rgba(255,255,255,0.2)', color: 'white', cursor: 'pointer'}}>
+                  <option value="gemini-1.5-flash">1.5-flash ⚡</option>
+                  <option value="gemini-2.0-flash">2.0-flash 🚀</option>
+                  <option value="gemini-2.5-flash">2.5-flash ✨</option>
+                  <option value="gemini-1.5-pro">1.5-pro 💎</option>
+                </select>
+                <button onClick={() => setShowFloatChat(false)}
+                  style={{background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', borderRadius: '50%', width: '24px', height: '24px', cursor: 'pointer', fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>✕</button>
+              </div>
+            </div>
+            {/* Farm context badge */}
+            <div style={{padding: '0.4rem 1rem', background: 'var(--surface-color)', fontSize: '0.72rem', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)'}}>
+              📍 {selectedPoint.name} · pH {selectedPoint.ph} · {selectedPoint.moisture}% moisture
+            </div>
+            {/* Messages */}
+            <div style={{flex: 1, overflowY: 'auto', padding: '0.75rem', display: 'flex', flexDirection: 'column', gap: '0.6rem'}}>
+              {chatMessages.map((msg, i) => (
+                <div key={i} style={{display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start'}}>
+                  <div style={{
+                    maxWidth: '85%', padding: '0.5rem 0.75rem', fontSize: '0.82rem', lineHeight: 1.5,
+                    borderRadius: msg.role === 'user' ? '14px 14px 3px 14px' : '14px 14px 14px 3px',
+                    background: msg.role === 'user' ? 'var(--accent-green)' : 'var(--surface-color)',
+                    color: msg.role === 'user' ? 'white' : 'var(--text-primary)',
+                    border: '1px solid var(--border-color)'
+                  }}>{msg.text}</div>
+                </div>
+              ))}
+              {isChatLoading && (
+                <div style={{display: 'flex', justifyContent: 'flex-start'}}>
+                  <div style={{padding: '0.5rem 0.75rem', borderRadius: '14px 14px 14px 3px', background: 'var(--surface-color)', border: '1px solid var(--border-color)', fontSize: '0.82rem', color: 'var(--text-secondary)'}}>
+                    <span style={{display: 'inline-flex', gap: '3px'}}>
+                      <span style={{animation: 'bounce 1s infinite 0s', display: 'inline-block'}}>●</span>
+                      <span style={{animation: 'bounce 1s infinite 0.2s', display: 'inline-block'}}>●</span>
+                      <span style={{animation: 'bounce 1s infinite 0.4s', display: 'inline-block'}}>●</span>
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* Input */}
+            <div style={{padding: '0.6rem', borderTop: '1px solid var(--border-color)', display: 'flex', gap: '0.4rem'}}>
+              <input value={chatInput} onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && sendChatMessage()}
+                placeholder="Ask about your farm..."
+                style={{flex: 1, padding: '0.5rem 0.75rem', borderRadius: '20px', border: '1px solid var(--border-color)', background: 'var(--surface-color)', color: 'var(--text-primary)', fontSize: '0.82rem', outline: 'none'}} />
+              <button onClick={sendChatMessage} disabled={isChatLoading}
+                style={{width: '36px', height: '36px', borderRadius: '50%', background: 'var(--accent-green)', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, opacity: isChatLoading ? 0.6 : 1}}>
+                <Send size={14} color="white" />
+              </button>
+            </div>
+          </div>
+        )}
+        {/* FAB Button */}
+        <button onClick={() => setShowFloatChat(prev => !prev)}
+          style={{
+            width: '56px', height: '56px', borderRadius: '50%',
+            background: showFloatChat ? 'var(--accent-red)' : 'var(--accent-green)',
+            border: 'none', cursor: 'pointer', boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.3s ease', transform: showFloatChat ? 'rotate(45deg)' : 'rotate(0deg)'
+          }} title={showFloatChat ? 'Close Chat' : 'AI Crop Advisor'}>
+          {showFloatChat ? <span style={{fontSize: '1.3rem', color: 'white'}}>✕</span> : <MessageSquare size={24} color="white" />}
+        </button>
       </div>
     </div>
   );
@@ -1051,3 +1699,4 @@ function SmallCard({ title, value, unit }) {
 }
 
 export default App;
+
