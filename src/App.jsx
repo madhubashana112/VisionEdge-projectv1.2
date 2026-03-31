@@ -1,9 +1,13 @@
 import { useState, useEffect } from 'react';
 import { 
   Droplet, FlaskConical, Thermometer, Waves, Activity, BarChart2, Map, 
-  MapPin, TrendingDown, TrendingUp, Leaf, Search, Info, Sun, Moon, User, Bell, Download, CloudRain, SunMedium, Cloud, Brain, Clock, Calculator, Plus, LogOut, CheckCircle
+  MapPin, TrendingDown, TrendingUp, Leaf, Search, Info, Sun, Moon, User, Bell, Download, CloudRain, SunMedium, Cloud, Brain, Clock, Calculator, Plus, LogOut, CheckCircle, Camera, ShieldAlert, DollarSign, Bug, Image as ImageIcon
 } from 'lucide-react';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { translations } from './translations';
+
+const genAI = new GoogleGenerativeAI("AIzaSyAr-lQMWIpR42zPgQ_XFQaDtTvs4ogHwWI");
+
 import { 
   Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, BarChart, Bar
@@ -93,6 +97,57 @@ function App() {
   const [reqM, setReqM] = useState(60);
   const [reqN, setReqN] = useState(120);
   const [reqPH, setReqPH] = useState(6.0);
+
+  // Enterprise Features State
+  const [marketPrice, setMarketPrice] = useState(200);
+  const [uploadedImage, setUploadedImage] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [weatherData, setWeatherData] = useState(null);
+  const [locationName, setLocationName] = useState('');
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const point = testPoints.find(p => p.id === selectedPointId);
+    if (!point || !point.location) return;
+    const [lat, lng] = parseLocation(point.location);
+    
+    async function fetchWeather() {
+      try {
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current_weather=true`);
+        const data = await res.json();
+        setWeatherData(data.current_weather);
+
+        const locRes = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=10`);
+        const locData = await locRes.json();
+        const city = locData.address?.city || locData.address?.town || locData.address?.county || locData.address?.state || '';
+        setLocationName(city);
+      } catch (err) {
+        console.error(err);
+        setLocationName('');
+      }
+    }
+    fetchWeather();
+  }, [selectedPointId]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const interval = setInterval(() => {
+      setTestPoints(prevPoints => prevPoints.map(pt => ({
+        ...pt,
+        moisture: Math.max(0, Math.min(100, +(pt.moisture + (Math.random() * 0.4 - 0.2)).toFixed(1))),
+        temp: Math.max(0, Math.min(50, +(pt.temp + (Math.random() * 0.2 - 0.1)).toFixed(1))),
+        ph: Math.max(0, Math.min(14, +(pt.ph + (Math.random() * 0.04 - 0.02)).toFixed(2))),
+        salinity: Math.max(0, +(pt.salinity + (Math.random() * 0.04 - 0.02)).toFixed(2))
+      })));
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated]);
 
   const submitNewCrop = () => {
     if (!newCropName.trim()) return;
@@ -208,16 +263,18 @@ function App() {
   };
 
   const calcFertilizer = () => {
-    // Basic Rice requirements per acre assumed baseline: N=60kg, P=20kg, K=30kg per acre for completely depleted soil.
-    // If n=160 (optimal target), missing=0. If n=100 (diff=60).
-    const missingN = Math.max(0, 160 - selectedPoint.n); 
-    const missingP = Math.max(0, 50 - selectedPoint.p);
-    const missingK = Math.max(0, 80 - selectedPoint.k);
-    
-    // Convert to rough fertilizer kg (Urea is 46% N, TSP is 46% P, MOP is 60% K)
-    const urea = Math.round((missingN / 0.46) * 0.5 * landSize);
-    const tsp = Math.round((missingP / 0.46) * 0.5 * landSize);
-    const mop = Math.round((missingK / 0.60) * 0.5 * landSize);
+    let cropN = selectedCrop ? selectedCrop.req.n : 160;
+    let cropP = selectedCrop ? Math.round(selectedCrop.req.n * 0.3) : 50; 
+    let cropK = selectedCrop ? Math.round(selectedCrop.req.n * 0.5) : 80;
+
+    let defN = Math.max(0, cropN - selectedPoint.n) * 2;
+    let defP = Math.max(0, cropP - selectedPoint.p) * 2;
+    let defK = Math.max(0, cropK - selectedPoint.k) * 2;
+
+    const hA = landSize * 0.4047;
+    const urea = Math.round((defN / 0.46) * hA);
+    const tsp = Math.round((defP / 0.46) * hA);
+    const mop = Math.round((defK / 0.60) * hA);
     
     return { urea, tsp, mop };
   };
@@ -278,6 +335,77 @@ function App() {
     );
   }
 
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const imageUrl = URL.createObjectURL(file);
+    setUploadedImage(imageUrl);
+    setIsAnalyzing(true);
+    setAiResult(null);
+
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      try {
+        const base64data = reader.result.split(',')[1];
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = 'You are an expert plant pathologist. Analyze this leaf. If it is healthy, say it\'s healthy. If there is a disease or pest, identify it. Reply ONLY with a strict JSON object: { "name": "Disease/Pest Name", "remedy": "A short 1-sentence agricultural remedy." }. No markdown, pure JSON.';
+        const imageParts = [{ inlineData: { data: base64data, mimeType: file.type } }];
+        
+        const result = await model.generateContent([prompt, ...imageParts]);
+        const responseText = result.response.text();
+        
+        try {
+          const cleanJson = responseText.replace(/```json/gi, '').replace(/```/gi, '').trim();
+          const parsed = JSON.parse(cleanJson);
+          setAiResult({ name: parsed.name, remedy: parsed.remedy });
+        } catch (err) {
+           setAiResult({ name: "Analysis Result Format Error", remedy: responseText });
+        }
+      } catch (err) {
+        console.error(err);
+        setAiResult({ name: "AI Connection Error", remedy: err.message || "Could not reach Gemini AI." });
+      } finally {
+        setIsAnalyzing(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const exportToCSV = () => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    csvContent += "ID,Farm Name,Coordinates,Last Update,Moisture(%),pH,Temp(C),Salinity(dS/m),Nitrogen(mg/kg),Phosphorus(mg/kg),Potassium(mg/kg),Suitability Score\n";
+    testPoints.forEach(row => {
+      let scoreStr = "N/A";
+      if (selectedCrop) {
+         let info = calculateSuitability(selectedCrop, row);
+         scoreStr = info.score + "%";
+      }
+      let rowArray = [
+        row.id, 
+        row.name, 
+        `"${row.location}"`,
+        `"${row.datetime}"`,
+        row.moisture, 
+        row.ph, 
+        row.temp, 
+        row.salinity, 
+        row.n, 
+        row.p, 
+        row.k,
+        scoreStr
+      ];
+      csvContent += rowArray.join(",") + "\n";
+    });
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "smart_soil_data_export.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const chartData = [
     { subject: 'Moisture', A: selectedPoint.moisture, fullMark: 100 },
     { subject: 'pH', A: selectedPoint.ph * 10, fullMark: 100 },
@@ -289,6 +417,24 @@ function App() {
 
   return (
     <div className="app-container">
+      <div className="report-header-print" style={{marginBottom: '2rem', borderBottom: '2px solid #e2e8f0', paddingBottom: '1rem', width: '100%'}}>
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start'}}>
+          <div>
+            <h1 style={{margin: '0 0 0.5rem 0', color: '#16a34a'}}>{t.officialReport || "Smart Soil Dashboard - Official Diagnostics Report"}</h1>
+            <div style={{color: '#64748b', fontSize: '1.1rem'}}>{t.reportDate || "Report Date:"} {new Date().toLocaleString('en-US')}</div>
+          </div>
+          <div style={{textAlign: 'right', fontSize: '1rem', color: '#334155', lineHeight: '1.5'}}>
+            <div><strong>Farm Area:</strong> {selectedPoint.name}</div>
+            <div><strong>GPS Location:</strong> {selectedPoint.location}</div>
+            <div><strong>System ID:</strong> #{selectedPoint.id.slice(-6)}</div>
+          </div>
+        </div>
+        <div style={{marginTop: '1rem', padding: '1rem', background: '#f8fafc', borderRadius: '8px', display: 'flex', gap: '3rem', flexWrap: 'wrap'}}>
+            <div><strong>Crop Analyzed:</strong> <span style={{color: 'var(--accent-green)', fontWeight: 'bold'}}>{selectedCrop ? t[selectedCrop.name] || selectedCrop.name : 'Generic Baseline Assessment'}</span></div>
+            <div><strong>Land Size Assessed:</strong> {landSize} Acres ({(landSize * 0.4047).toFixed(2)} Hectares)</div>
+        </div>
+      </div>
+
       {/* Modals */}
       {showAddModal && (
         <div className="modal-overlay">
@@ -335,7 +481,10 @@ function App() {
         <div className="logo-section">
           <div className="logo-box"><Leaf size={28} /></div>
           <div>
-            <h1>{t.appTitle}</h1>
+            <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
+              <h1 style={{margin: 0}}>{t.appTitle}</h1>
+              <span className="live-badge print-hide"><div className="pulse-dot"></div> {t.liveStream || "LIVE"}</span>
+            </div>
             <div className="header-subtitle">{t.appSubtitle}</div>
           </div>
         </div>
@@ -403,6 +552,7 @@ function App() {
         <button className={`tab-btn ${activeTab === 'crop' ? 'active' : ''}`} onClick={() => setActiveTab('crop')}><Leaf size={18} /> {t.cropAnalysis}</button>
         <button className={`tab-btn ${activeTab === 'charts' ? 'active' : ''}`} onClick={() => setActiveTab('charts')}><BarChart2 size={18} /> {t.dataCharts}</button>
         <button className={`tab-btn ${activeTab === 'map' ? 'active' : ''}`} onClick={() => setActiveTab('map')}><Map size={18} /> {t.fieldMap}</button>
+        <button className={`tab-btn ${activeTab === 'pest' ? 'active' : ''}`} onClick={() => setActiveTab('pest')}><Bug size={18} /> {t.pestTab || "Pest AI"}</button>
       </div>
 
       {/* Split View */}
@@ -450,37 +600,78 @@ function App() {
               <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start'}}>
                 <div>
                   <h3 className="panel-title">{selectedPoint.name}</h3>
-                  <p className="panel-subtitle">{t.recordedOn} {selectedPoint.datetime}</p>
+                  <p className="panel-subtitle">
+                    {t.liveStream || "Live Data Stream:"} • {currentTime.toLocaleString(lang === 'si' ? 'si-LK' : lang === 'ta' ? 'ta-LK' : 'en-US', { dateStyle: 'full', timeStyle: 'medium' })}
+                  </p>
                 </div>
-                <button className="lang-toggle print-hide" style={{display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'transparent', color: 'var(--text-primary)'}} onClick={() => window.print()}>
-                  <Download size={16} /> {t.downloadReport || "Download"}
-                </button>
+                <div style={{display: 'flex', gap: '0.5rem'}}>
+                  <button className="lang-toggle print-hide" style={{display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--accent-green)', color: 'white'}} onClick={exportToCSV}>
+                    <Download size={16} /> {t.exportCsv || "Export CSV"}
+                  </button>
+                  <button className="lang-toggle print-hide" style={{display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'transparent', color: 'var(--text-primary)'}} onClick={() => window.print()}>
+                    <Download size={16} /> {t.downloadReport || "Download"}
+                  </button>
+                </div>
               </div>
 
-              {/* Yield Card */}
-              <div className="yield-card print-hide">
-                 <div>
-                    <h3 style={{margin: '0 0 0.5rem 0', fontWeight: 500}}><CheckCircle size={18} style={{marginRight: '0.5rem', verticalAlign:'middle'}}/>{t.predictedYield || "Predicted Yield Target"}</h3>
-                    <div style={{opacity: 0.9, fontSize: '0.9rem'}}>{t.basedOnCur || "Based on current soil health"}</div>
+              {/* Yield & Profit Card */}
+              <div className="yield-card print-hide" style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
+                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem'}}>
+                   <div>
+                      <h3 style={{margin: '0 0 0.5rem 0', fontWeight: 500}}><CheckCircle size={18} style={{marginRight: '0.5rem', verticalAlign:'middle'}}/>{t.predictedYield || "Predicted Yield Target"}</h3>
+                      <div style={{opacity: 0.9, fontSize: '0.9rem'}}>{t.basedOnCur || "Based on current soil health"}</div>
+                   </div>
+                   <div style={{textAlign: 'right'}}>
+                     <span className="yield-val" style={{fontSize: '1.8rem'}}>{calcYield()}</span> <span style={{fontSize: '0.9rem'}}>{t.kgPerHectare || "kg/Hectare"}</span>
+                   </div>
                  </div>
-                 <div>
-                   <span className="yield-val">{calcYield()}</span> {t.kgPerHectare || "kg/Hectare"}
+                 
+                 <div style={{background: 'rgba(255,255,255,0.1)', padding: '1rem', borderRadius: '8px'}}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem'}}>
+                      <DollarSign size={16} color="var(--accent-green)"/>
+                      <label style={{fontSize: '0.9rem'}}>{t.marketPrice || "Market Price (per kg)"}:</label>
+                      <input type="number" value={marketPrice} onChange={(e) => setMarketPrice(Number(e.target.value) || 0)} style={{width: '80px', padding: '0.3rem', fontSize: '0.9rem'}}/> Rs.
+                    </div>
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'baseline'}}>
+                      <div style={{fontSize: '0.9rem'}}>{t.estimatedProfit || "Estimated Gross Profit"}:</div>
+                      <div style={{fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--accent-green)'}}>
+                        Rs. {Math.round(calcYield() * (landSize * 0.4047) * marketPrice).toLocaleString()}
+                      </div>
+                    </div>
                  </div>
               </div>
 
               {/* Weather Card */}
-              {weather && (
+              {weatherData && (
                 <div className="weather-card print-hide">
                   <div>
-                    <h3>{t.currentWeather}</h3>
-                    <div style={{opacity: 0.8, fontSize: '0.85rem'}}>{selectedPoint.location}</div>
+                    <h3>{t.weatherForecast || "Live Weather"}</h3>
+                    <div style={{opacity: 0.8, fontSize: '0.85rem'}}>{locationName || selectedPoint.location}</div>
                   </div>
                   <div style={{display: 'flex', alignItems: 'center'}}>
-                    <div className="weather-temp">{weather.temperature}°C</div>
-                    {weather.weathercode < 3 ? <SunMedium size={48} /> : weather.weathercode < 60 ? <Cloud size={48} /> : <CloudRain size={48} />}
+                    <div className="weather-temp">{weatherData.temperature}°C</div>
+                    {weatherData.weathercode < 3 ? <SunMedium size={48} /> : weatherData.weathercode < 60 ? <Cloud size={48} /> : <CloudRain size={48} />}
                   </div>
                 </div>
               )}
+
+              {/* Smart Irrigation Panel */}
+              <div className="smart-panel print-hide">
+                 <h3 style={{margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '8px'}}><Activity size={18}/> {t.smartIrrigation || "Smart Irrigation"}</h3>
+                 <div className="pump-switch">
+                    <div>
+                        <div style={{fontWeight: 'bold'}}>{t.pumpStatus || "Pump Status"}</div>
+                        <div style={{fontSize: '0.85rem', color: 'var(--text-secondary)'}}>{t.autoMode || "Auto"}</div>
+                    </div>
+                    <div>
+                        {selectedPoint.moisture < 45 ? (
+                           <div style={{padding: '6px 12px', background: 'rgba(59,130,246,0.2)', color: 'var(--accent-blue)', borderRadius: '20px', fontWeight: 'bold', border: '1px solid var(--accent-blue)', animation: 'pulse 2s infinite'}}>{t.pumpOn || "PUMPING WATER"}</div>
+                        ) : (
+                           <div style={{padding: '6px 12px', background: 'rgba(255,255,255,0.1)', color: 'var(--text-secondary)', borderRadius: '20px', fontWeight: 'bold'}}>{t.pumpOff || "STANDBY"}</div>
+                        )}
+                    </div>
+                 </div>
+              </div>
               
               <div className="overview-grid">
                 <div className="ov-card">
@@ -720,6 +911,56 @@ function App() {
                 </MapContainer>
               </div>
               <p className="map-caption print-hide">{t.clickOnMarkers}</p>
+            </div>
+          )}
+
+          {activeTab === 'pest' && (
+            <div>
+              <h3 className="panel-title">{t.pestTab || "Pest & Disease AI"}</h3>
+              <p style={{color: 'var(--text-secondary)', marginBottom: '1.5rem'}}>{t.pestTip || "Upload a clear photo of the leaf."}</p>
+              
+              {!uploadedImage ? (
+                <div className="pest-upload-zone print-hide">
+                  <label style={{cursor: 'pointer', display: 'block', width: '100%', height: '100%'}}>
+                    <input type="file" accept="image/*" style={{display: 'none'}} onChange={handleImageUpload} />
+                    <Camera size={48} style={{margin: '0 auto 1rem auto', opacity: 0.5, color: 'var(--text-primary)'}} />
+                    <h3 style={{margin: '0 0 0.5rem 0', fontWeight: 500}}>{t.dropImageHere || "Drag & Drop or Click to Upload"}</h3>
+                    <div style={{fontSize: '0.85rem', color: 'var(--text-secondary)'}}>JPG, PNG (Max 5MB)</div>
+                  </label>
+                </div>
+              ) : isAnalyzing ? (
+                <div className="empty-state print-hide" style={{padding: '4rem 1rem'}}>
+                  <div className="pulse-dot" style={{width: 24, height: 24, margin: '0 auto 1.5rem auto'}}></div>
+                  <h3>{t.analyzingData || "AI Neural Network Analyzing..."}</h3>
+                  <p>Processing visual patterns and spectral signatures...</p>
+                </div>
+              ) : (
+                aiResult && (
+                  <div style={{animation: 'fadeIn 0.5s ease'}}>
+                     <div className="pest-upload-zone print-hide" style={{padding: '1.5rem', marginBottom: '1.5rem', borderStyle: 'solid', borderColor: 'var(--accent-green)', background: "transparent", cursor: 'default'}}>
+                        <img src={uploadedImage} alt="Scanned Leaf" style={{width: '240px', height: '200px', objectFit: 'cover', borderRadius: '12px', marginBottom: '1.5rem', boxShadow: '0 8px 24px rgba(0,0,0,0.1)'}} />
+                        <h4 style={{margin: 0, color: 'var(--accent-green)', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem'}}>
+                           <CheckCircle size={20} /> {t.scanComplete || "Analysis Complete"}
+                        </h4>
+                     </div>
+
+                     <div className="chart-container-box">
+                        <div style={{display: 'flex', gap: '1rem', alignItems: 'flex-start'}}>
+                           <div style={{background: 'rgba(239, 68, 68, 0.1)', padding: '1rem', borderRadius: 8}}>
+                             <ShieldAlert size={32} color="var(--accent-red)" />
+                           </div>
+                           <div>
+                              <h3 style={{margin: '0 0 0.5rem 0', color: 'var(--text-primary)'}}>{t.diseaseDetected || "Detected: "} <span style={{color: 'var(--accent-orange)'}}>{aiResult.name}</span></h3>
+                              <p style={{margin: 0, color: 'var(--text-secondary)', lineHeight: 1.5}}>
+                                <strong>{t.aiRemedy || "Remedy: "}</strong> {aiResult.remedy}
+                              </p>
+                           </div>
+                        </div>
+                     </div>
+                     <button className="btn-secondary print-hide" onClick={() => {setUploadedImage(null); setAiResult(null);}}>Scan Another Leaf</button>
+                  </div>
+                )
+              )}
             </div>
           )}
         </div>

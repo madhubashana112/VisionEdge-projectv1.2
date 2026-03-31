@@ -105,7 +105,18 @@ export const translations = {
     liveStream: "LIVE SENSOR STREAM",
     officialReport: "Smart Soil Dashboard - Official Diagnostics Report",
     reportDate: "Report Date:",
-    pestTip: "Upload a clear photo of the top and bottom of the affected leaf for highest AI accuracy."
+    pestTip: "Upload a clear photo of the top and bottom of the affected leaf for highest AI accuracy.",
+    weatherForecast: "Live Weather",
+    exportCsv: "Export CSV",
+    smartIrrigation: "Smart Irrigation",
+    pumpStatus: "Pump Status",
+    autoMode: "Auto",
+    pumpOn: "PUMPING WATER",
+    pumpOff: "STANDBY",
+    urea: "Urea",
+    tsp: "TSP",
+    mop: "MOP",
+    criticalAlert: "Critical Environment Alert!"
   },
   si: {
     appTitle: "ස්මාර්ට් පස් විශ්ලේෂණ පද්ධතිය",
@@ -215,7 +226,18 @@ export const translations = {
     liveStream: "සජීවී දත්ත (LIVE)",
     officialReport: "නිල කෘෂිකාර්මික විශ්ලේෂණ වාර්තාව",
     reportDate: "වාර්තාවේ දිනය:",
-    pestTip: "වඩාත් නිවැරදි විශ්ලේෂණයක් සඳහා ලෙඩ වී ඇති කොළයක පැහැදිලි ඡායාරූපයක් (Upload) දාන්න."
+    pestTip: "වඩාත් නිවැරදි විශ්ලේෂණයක් සඳහා ලෙඩ වී ඇති කොළයක පැහැදිලි ඡායාරූපයක් (Upload) දාන්න.",
+    weatherForecast: "කාලගුණ අනාවැකිය",
+    exportCsv: "දත්ත බාගත කරන්න",
+    smartIrrigation: "ස්මාර්ට් ජල පාලනය",
+    pumpStatus: "ජල පොම්පය",
+    autoMode: "ස්වයංක්‍රීය",
+    pumpOn: "ජලය පොම්ප කරයි",
+    pumpOff: "අක්‍රියයි",
+    urea: "යූරියා",
+    tsp: "TSP",
+    mop: "MOP",
+    criticalAlert: "අනතුරු ඇඟවීමයි!"
   },
   ta: {
     appTitle: "ஸ்மார்ட் மண் பகுப்பாய்வு அமைப்பு",
@@ -325,6 +347,17 @@ export const translations = {
     liveStream: "நேரடி தரவு (LIVE)",
     officialReport: "அதிகாரப்பூர்வ விவசாய பகுப்பாய்வு அறிக்கை",
     reportDate: "அறிக்கை தேதி:",
-    pestTip: "மிகத் துல்லியமான AI பகுப்பாய்விற்கு பாதிக்கப்பட்ட இலையின் தெளிவான புகைப்படத்தைப் பதிவேற்றவும்."
+    pestTip: "மிகத் துல்லியமான AI பகுப்பாய்விற்கு பாதிக்கப்பட்ட இலையின் தெளிவான புகைப்படத்தைப் பதிவேற்றவும்.",
+    weatherForecast: "வானிலை அறிக்கை",
+    exportCsv: "தரவை ஏற்றுமதி செய்",
+    smartIrrigation: "ஸ்மார்ட் நீர்ப்பாசனம்",
+    pumpStatus: "பம்ப் நிலை",
+    autoMode: "தானியங்கி முறை",
+    pumpOn: "நீர் பாய்ச்சப்படுகிறது",
+    pumpOff: "காத்திருப்பு",
+    urea: "யூரியா",
+    tsp: "TSP",
+    mop: "MOP",
+    criticalAlert: "உடனடி எச்சரிக்கை!"
   }
 };
